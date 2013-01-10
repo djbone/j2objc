@@ -26,10 +26,12 @@ import com.google.devtools.j2objc.Options;
 import com.google.devtools.j2objc.types.HeaderImportCollector;
 import com.google.devtools.j2objc.types.IOSMethod;
 import com.google.devtools.j2objc.types.ImportCollector;
+import com.google.devtools.j2objc.types.TypeService;
 import com.google.devtools.j2objc.types.Types;
 import com.google.devtools.j2objc.util.ErrorReportingASTVisitor;
 import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.UnicodeUtils;
+import com.google.inject.Inject;
 
 import org.eclipse.jdt.core.dom.ASTVisitor;
 import org.eclipse.jdt.core.dom.AbstractTypeDeclaration;
@@ -61,6 +63,13 @@ import java.util.Set;
  * @author Tom Ball
  */
 public class ObjectiveCHeaderGenerator extends ObjectiveCSourceFileGenerator {
+
+  private final TypeService types;
+
+  @Inject
+  public ObjectiveCHeaderGenerator(TypeService types) {
+	this.types = types;
+  }
 
   /**
    * Generate an Objective-C header file for each type declared in a specified

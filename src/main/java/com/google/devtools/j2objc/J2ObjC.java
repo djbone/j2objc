@@ -34,11 +34,17 @@ import com.google.devtools.j2objc.translate.InnerClassExtractor;
 import com.google.devtools.j2objc.translate.JavaToIOSMethodTranslator;
 import com.google.devtools.j2objc.translate.JavaToIOSTypeConverter;
 import com.google.devtools.j2objc.translate.Rewriter;
+import com.google.devtools.j2objc.types.TypeService;
 import com.google.devtools.j2objc.types.Types;
 import com.google.devtools.j2objc.util.ASTNodeException;
 import com.google.devtools.j2objc.util.DeadCodeMap;
 import com.google.devtools.j2objc.util.NameTable;
 import com.google.devtools.j2objc.util.ProGuardUsageParser;
+import com.google.inject.AbstractModule;
+import com.google.inject.Guice;
+import com.google.inject.Inject;
+import com.google.inject.Injector;
+import com.google.inject.Singleton;
 
 import org.eclipse.jdt.core.compiler.IProblem;
 import org.eclipse.jdt.core.dom.AST;
@@ -93,6 +99,8 @@ public class J2ObjC {
   private static int nErrors = 0;
   private static int nWarnings = 0;
 
+  private final TypeService types;
+
   public enum Language {
     OBJECTIVE_C(".m"), OBJECTIVE_CPP(".mm");
 
@@ -116,6 +124,11 @@ public class J2ObjC {
   }
 
   private static final Logger logger = Logger.getLogger(J2ObjC.class.getName());
+
+  @Inject
+  public J2ObjC(TypeService types) {
+    this.types = types;
+  }
 
   /**
    * Parse a specified Java source file and generate Objective C header(s)
@@ -216,7 +229,7 @@ public class J2ObjC {
   private void cleanup() {
     NameTable.cleanup();
     Symbols.cleanup();
-    Types.cleanup();
+//    types.cleanup();
   }
 
   /**
@@ -339,7 +352,7 @@ public class J2ObjC {
    * @return the rewritten source
    * @throws AssertionError if the translator makes invalid edits
    */
-  public static String translate(CompilationUnit unit, String source) {
+  public String translate(CompilationUnit unit, String source) {
 
     // Update code that has GWT references.
     new GwtConverter().run(unit);
@@ -376,7 +389,7 @@ public class J2ObjC {
     }
 
     // Verify all modified nodes have type bindings
-    Types.verifyNode(unit);
+    types.verifyNode(unit);
 
     Document doc = new Document(source);
     TextEdit edit = unit.rewrite(doc, Options.getCompilerOptions());
@@ -390,10 +403,10 @@ public class J2ObjC {
     return doc.get();
   }
 
-  public static void initializeTranslation(CompilationUnit unit) {
+  public void initializeTranslation(CompilationUnit unit) {
     unit.recordModifications();
     NameTable.initialize(unit);
-    Types.initialize(unit);
+    types.initialize(unit);
     Symbols.initialize(unit);
   }
 
@@ -744,6 +757,48 @@ public class J2ObjC {
     System.exit(1);
   }
 
+  public void compile(String[] files) {
+    try {
+      initPlugins(Options.getPluginPathEntries(), Options.getPluginOptionString());
+    } catch (IOException e) {
+      error(e);
+    }
+
+    // Remove dead-code first, so modified file paths are replaced in the
+    // translation list.
+    int beginningErrorLevel = getCurrentErrorLevel();
+    try {
+      files = removeDeadCode(files);
+    } catch (IOException e) {
+      error(e.getMessage());
+    }
+    if (getCurrentErrorLevel() > beginningErrorLevel) {
+      return;
+    }
+
+    nFiles = 0;
+    for (int i = 0; i < files.length; i++) {
+      String file = files[i];
+      try {
+        if (file.endsWith(".java")) {  // Eclipse may send all project entities.
+          printInfo("translating " + file);
+          translate(file);
+          nFiles++;
+        } else if (file.endsWith(".jar")) {
+          translateSourceJar(this, file);
+        }
+      } catch (IOException e) {
+        error(e.getMessage());
+      }
+    }
+
+    for (Plugin plugin : Options.getPlugins()) {
+      plugin.endProcessing(Options.getOutputDirectory());
+    }
+
+    exit();
+  }
+
   /**
    * Entry point for tool.
    *
@@ -761,46 +816,13 @@ public class J2ObjC {
       error(e.getMessage());
       System.exit(1);
     }
-    J2ObjC compiler = new J2ObjC();
+    Injector injector = Guice.createInjector(new AbstractModule() {
+		@Override
+		protected void configure() {
+			bind(TypeService.class).to(Types.class).in(Singleton.class);
+		}
+	});
 
-    try {
-      initPlugins(Options.getPluginPathEntries(), Options.getPluginOptionString());
-    } catch (IOException e) {
-      error(e);
-    }
-
-    // Remove dead-code first, so modified file paths are replaced in the
-    // translation list.
-    int beginningErrorLevel = compiler.getCurrentErrorLevel();
-    try {
-      files = compiler.removeDeadCode(files);
-    } catch (IOException e) {
-      error(e.getMessage());
-    }
-    if (compiler.getCurrentErrorLevel() > beginningErrorLevel) {
-      return;
-    }
-
-    nFiles = 0;
-    for (int i = 0; i < files.length; i++) {
-      String file = files[i];
-      try {
-        if (file.endsWith(".java")) {  // Eclipse may send all project entities.
-          printInfo("translating " + file);
-          compiler.translate(file);
-          nFiles++;
-        } else if (file.endsWith(".jar")) {
-          translateSourceJar(compiler, file);
-        }
-      } catch (IOException e) {
-        error(e.getMessage());
-      }
-    }
-
-    for (Plugin plugin : Options.getPlugins()) {
-      plugin.endProcessing(Options.getOutputDirectory());
-    }
-
-    exit();
+    injector.getInstance(J2ObjC.class).compile(files);
   }
 }

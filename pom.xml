@@ -146,5 +146,10 @@
       <version>4.10</version>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>com.google.inject</groupId>
+      <artifactId>guice</artifactId>
+      <version>3.0</version>
+    </dependency>
   </dependencies>
 </project>

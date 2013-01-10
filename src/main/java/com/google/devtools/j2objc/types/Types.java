@@ -21,6 +21,7 @@ import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.devtools.j2objc.J2ObjC;
 import com.google.devtools.j2objc.util.NameTable;
+import com.google.inject.Singleton;
 import com.google.j2objc.annotations.AutoreleasePool;
 import com.google.j2objc.annotations.Weak;
 import com.google.j2objc.annotations.WeakOuter;
@@ -57,35 +58,30 @@ import java.util.Set;
  *
  * @author Tom Ball
  */
-// TODO(user): convert to injectable implementation, to allow translator
-// core to be reused for other languages.
-public class Types {
-  private final AST ast;
-  private final Map<Object, IBinding> bindingMap;
-  private final Map<ITypeBinding, ITypeBinding> typeMap = Maps.newHashMap();
-  private final Map<ITypeBinding, ITypeBinding> renamedTypeMap = Maps.newHashMap();
-  private final Map<String, String> simpleTypeMap = Maps.newHashMap();
-  private final Map<IMethodBinding, IOSMethod> mappedMethods = Maps.newHashMap();
-  private final Map<Expression, IMethodBinding> mappedInvocations = Maps.newHashMap();
-  private final Map<IVariableBinding, IVariableBinding> mappedVariables = Maps.newHashMap();
-  private final Map<ASTNode, ASTNode> substitutionMap = Maps.newHashMap();
-  private final Map<IVariableBinding, ITypeBinding> variablesNeedingCasts = Maps.newHashMap();
-  private final List<IMethodBinding> functions = Lists.newArrayList();
-  private final Map<ITypeBinding, ITypeBinding> primitiveToWrapperTypes =
-      new HashMap<ITypeBinding, ITypeBinding>();
-  private final Map<ITypeBinding, ITypeBinding> wrapperToPrimitiveTypes =
-      new HashMap<ITypeBinding, ITypeBinding>();
-  private final List<IVariableBinding> releaseableFields = Lists.newArrayList();
-  private final ITypeBinding javaObjectType;
-  private final ITypeBinding javaClassType;
-  private final ITypeBinding javaCloneableType;
-  private final ITypeBinding javaNumberType;
-  private final ITypeBinding javaStringType;
-  private final ITypeBinding javaVoidType;
-  private final ITypeBinding voidType;
-  private final ITypeBinding booleanType;
-
-  private static Types instance;
+@Singleton
+public class Types implements TypeService {
+  private AST ast;
+  private Map<Object, IBinding> bindingMap;
+  private Map<ITypeBinding, ITypeBinding> typeMap;
+  private Map<ITypeBinding, ITypeBinding> renamedTypeMap;
+  private Map<String, String> simpleTypeMap;
+  private Map<IMethodBinding, IOSMethod> mappedMethods;
+  private Map<Expression, IMethodBinding> mappedInvocations;
+  private Map<IVariableBinding, IVariableBinding> mappedVariables;
+  private Map<ASTNode, ASTNode> substitutionMap;
+  private Map<IVariableBinding, ITypeBinding> variablesNeedingCasts;
+  private List<IMethodBinding> functions;
+  private Map<ITypeBinding, ITypeBinding> primitiveToWrapperTypes;
+  private Map<ITypeBinding, ITypeBinding> wrapperToPrimitiveTypes;
+  private List<IVariableBinding> releaseableFields;
+  private ITypeBinding javaObjectType;
+  private ITypeBinding javaClassType;
+  private ITypeBinding javaCloneableType;
+  private ITypeBinding javaNumberType;
+  private ITypeBinding javaStringType;
+  private ITypeBinding javaVoidType;
+  private ITypeBinding voidType;
+  private ITypeBinding booleanType;
 
   // Non-standard naming pattern is used, since in this case it's more readable.
   public final IOSTypeBinding NSCopying = new IOSTypeBinding("NSCopying", true);
@@ -107,24 +103,40 @@ public class Types {
   public IOSArrayTypeBinding IOSObjectArray;
   public IOSArrayTypeBinding IOSShortArray;
 
-  private final Map<String, IOSTypeBinding> iosBindingMap = Maps.newHashMap();
+  private Map<String, IOSTypeBinding> iosBindingMap;
 
-  private final Map<ITypeBinding, String> primitiveTypeNameMap = Maps.newHashMap();
+  private Map<ITypeBinding, String> primitiveTypeNameMap;
 
   // Map a primitive type to its emulation array type.
-  private final Map<String, IOSArrayTypeBinding> arrayTypeMap = Maps.newHashMap();
-  private final Map<ITypeBinding, IOSArrayTypeBinding> arrayBindingMap = Maps.newHashMap();
-  private final Map<IOSArrayTypeBinding, ITypeBinding> componentTypeMap = Maps.newHashMap();
-
-  // The first argument of a iOS method isn't named, but Java requires some sort of valid parameter
-  // name.  The method mapper therefore uses this string, which the generators ignore.
-  public static final String EMPTY_PARAMETER_NAME = "__empty_parameter__";
-  public static final String NS_ANY_TYPE = "NS_ANY_TYPE";  // type of "id"
+  private Map<String, IOSArrayTypeBinding> arrayTypeMap;
+  private Map<ITypeBinding, IOSArrayTypeBinding> arrayBindingMap;
+  private Map<IOSArrayTypeBinding, ITypeBinding> componentTypeMap;
 
   private static final int STATIC_FINAL_MODIFIERS = Modifier.STATIC | Modifier.FINAL;
 
-  private Types(CompilationUnit unit) {
+  @Override
+  public void initialize(CompilationUnit unit) {
     ast = unit.getAST();
+
+    typeMap = Maps.newHashMap();
+    renamedTypeMap = Maps.newHashMap();
+    simpleTypeMap = Maps.newHashMap();
+    mappedMethods = Maps.newHashMap();
+    mappedInvocations = Maps.newHashMap();
+    mappedVariables = Maps.newHashMap();
+    substitutionMap = Maps.newHashMap();
+    variablesNeedingCasts = Maps.newHashMap();
+    functions = Lists.newArrayList();
+    primitiveToWrapperTypes = new HashMap<ITypeBinding, ITypeBinding>();
+    wrapperToPrimitiveTypes = new HashMap<ITypeBinding, ITypeBinding>();
+    releaseableFields = Lists.newArrayList();
+
+    iosBindingMap = Maps.newHashMap();
+    primitiveTypeNameMap = Maps.newHashMap();
+    arrayTypeMap = Maps.newHashMap();
+    arrayBindingMap = Maps.newHashMap();
+    componentTypeMap = Maps.newHashMap();
+
     initializeBaseClasses();
     javaObjectType = ast.resolveWellKnownType("java.lang.Object");
     javaClassType = ast.resolveWellKnownType("java.lang.Class");
@@ -306,7 +318,8 @@ public class Types {
    * If this method overrides another method, return the binding for the
    * original declaration.
    */
-  public static IMethodBinding getOriginalMethodBinding(IMethodBinding method) {
+  @Override
+  public IMethodBinding getOriginalMethodBinding(IMethodBinding method) {
     if (method != null) {
       ITypeBinding clazz = method.getDeclaringClass();
       ITypeBinding superclass = clazz.getSuperclass();
@@ -359,44 +372,37 @@ public class Types {
   /**
    * Returns true if the specified binding is for a static final variable.
    */
-  public static boolean isConstantVariable(IVariableBinding binding) {
+  @Override
+  public boolean isConstantVariable(IVariableBinding binding) {
     return (binding.getModifiers() & Types.STATIC_FINAL_MODIFIERS) == Types.STATIC_FINAL_MODIFIERS;
   }
 
-  public static boolean isStaticVariable(IVariableBinding binding) {
+  @Override
+  public boolean isStaticVariable(IVariableBinding binding) {
     return (binding.getModifiers() & Modifier.STATIC) > 0;
   }
 
-  public static boolean isPrimitiveConstant(IVariableBinding binding) {
+  @Override
+  public boolean isPrimitiveConstant(IVariableBinding binding) {
     return binding != null && isConstantVariable(binding) && binding.getType().isPrimitive() &&
         binding.getConstantValue() != null;
-  }
-
-  /**
-   * Initialize this service using the AST returned by the parser.
-   */
-  public static void initialize(CompilationUnit unit) {
-    instance = new Types(unit);
-  }
-
-  public static void cleanup() {
-    instance = null;
   }
 
   /**
    * Given a JDT type binding created by the parser, either replace it with an iOS
    * equivalent, or return the given type.
    */
-  public static ITypeBinding mapType(ITypeBinding binding) {
+  @Override
+  public ITypeBinding mapType(ITypeBinding binding) {
     if (binding == null) {  // happens when mapping a primitive type
       return null;
     }
     if (binding.isArray()) {
       return resolveArrayType(binding.getComponentType());
     }
-    ITypeBinding newBinding = instance.typeMap.get(binding);
-    if (newBinding == null && binding.isAssignmentCompatible(instance.javaClassType)) {
-      newBinding = instance.typeMap.get(instance.javaClassType);
+    ITypeBinding newBinding = typeMap.get(binding);
+    if (newBinding == null && binding.isAssignmentCompatible(javaClassType)) {
+      newBinding = typeMap.get(javaClassType);
     }
     return newBinding != null ? newBinding : binding;
   }
@@ -404,61 +410,67 @@ public class Types {
   /**
    * Given a fully-qualified type name, return its binding.
    */
-  public static ITypeBinding mapTypeName(String typeName) {
-    ITypeBinding binding = instance.ast.resolveWellKnownType(typeName);
+  @Override
+  public ITypeBinding mapTypeName(String typeName) {
+    ITypeBinding binding = ast.resolveWellKnownType(typeName);
     return mapType(binding);
   }
 
   /**
    * Returns whether a given type has an iOS equivalent.
    */
-  public static boolean hasIOSEquivalent(ITypeBinding binding) {
-    return binding.isArray() || instance.typeMap.containsKey(binding.getTypeDeclaration());
+  @Override
+  public boolean hasIOSEquivalent(ITypeBinding binding) {
+    return binding.isArray() || typeMap.containsKey(binding.getTypeDeclaration());
   }
 
   /**
    * Returns true if a Type AST node refers to an iOS type.
    */
-  public static boolean isIOSType(Type type) {
+  @Override
+  public boolean isIOSType(Type type) {
     return isIOSType(type.toString());
   }
 
   /**
    * Returns true if a type name refers to an iOS type.
    */
-  public static boolean isIOSType(String name) {
-    return instance.simpleTypeMap.get(name) != null
-        || instance.simpleTypeMap.containsValue(name);
+  @Override
+  public boolean isIOSType(String name) {
+    return simpleTypeMap.get(name) != null
+        || simpleTypeMap.containsValue(name);
   }
 
   /**
    * Returns a simple (no package) name for a given one.
    */
-  public static String mapSimpleTypeName(String typeName) {
-    String newName = instance.simpleTypeMap.get(typeName);
+  @Override
+  public String mapSimpleTypeName(String typeName) {
+    String newName = simpleTypeMap.get(typeName);
     return newName != null ? newName : typeName;
   }
 
   /**
    * Returns a Type AST node for a specific type binding.
    */
-  public static Type makeType(ITypeBinding binding) {
+  @Override
+  public Type makeType(ITypeBinding binding) {
     Type type;
     if (binding.isPrimitive()) {
       PrimitiveType.Code typeCode = PrimitiveType.toCode(binding.getName());
-      type = instance.ast.newPrimitiveType(typeCode);
+      type = ast.newPrimitiveType(typeCode);
     } else if (binding.isArray() && !(binding instanceof IOSArrayTypeBinding)) {
       Type componentType = makeType(binding.getComponentType());
-      type = instance.ast.newArrayType(componentType);
+      type = ast.newArrayType(componentType);
     } else {
       String typeName = binding.getErasure().getName();
       if (typeName == "") {
         // Debugging aid for anonymous (no-name) classes.
         typeName = "$Local$";
       }
-      SimpleName name = instance.ast.newSimpleName(typeName);
+      SimpleName name = ast.newSimpleName(typeName);
       addBinding(name, binding);
-      type = instance.ast.newSimpleType(name);
+      type = ast.newSimpleType(name);
     }
     addBinding(type, binding);
     return type;
@@ -467,95 +479,112 @@ public class Types {
   /**
    * Creates a replacement iOS type for a given JDT type.
    */
-  public static Type makeIOSType(Type type) {
-    ITypeBinding binding = Types.getTypeBinding(type);
+  @Override
+  public Type makeIOSType(Type type) {
+    ITypeBinding binding = getTypeBinding(type);
     return makeIOSType(binding);
   }
 
-  public static Type makeIOSType(ITypeBinding binding) {
+  @Override
+  public Type makeIOSType(ITypeBinding binding) {
     if (binding.isArray()) {
       ITypeBinding componentType = binding.getComponentType();
-      return Types.makeType(Types.resolveArrayType(componentType));
+      return makeType(resolveArrayType(componentType));
     }
-    ITypeBinding newBinding = Types.mapType(binding);
-    return binding != newBinding ? Types.makeType(newBinding) : null;
+    ITypeBinding newBinding = mapType(binding);
+    return binding != newBinding ? makeType(newBinding) : null;
   }
 
   /**
    * Returns true if a specified method binding refers to a replacement iOS
    * type.
    */
-  public static boolean isMappedMethod(IMethodBinding method) {
-    return method instanceof IOSMethodBinding ? true : instance.mappedMethods.containsKey(method);
+  @Override
+  public boolean isMappedMethod(IMethodBinding method) {
+    return method instanceof IOSMethodBinding ? true : mappedMethods.containsKey(method);
   }
 
-  public static void addMappedIOSMethod(IMethodBinding binding, IOSMethod method) {
-    instance.mappedMethods.put(binding, method);
-    Types.addBinding(method, binding);
+  @Override
+  public void addMappedIOSMethod(IMethodBinding binding, IOSMethod method) {
+    mappedMethods.put(binding, method);
+    addBinding(method, binding);
   }
 
-  public static IOSMethod getMappedMethod(IMethodBinding binding) {
-    return instance.mappedMethods.get(binding);
+  @Override
+  public IOSMethod getMappedMethod(IMethodBinding binding) {
+    return mappedMethods.get(binding);
   }
 
   /**
    * Returns true if a specified variable binding refers has a replacement.
    */
-  public static boolean isMappedVariable(IVariableBinding var) {
-    return instance.mappedVariables.containsKey(var);
+  @Override
+  public boolean isMappedVariable(IVariableBinding var) {
+    return mappedVariables.containsKey(var);
   }
 
-  public static void addMappedVariable(ASTNode node, IVariableBinding newBinding) {
+  @Override
+  public void addMappedVariable(ASTNode node, IVariableBinding newBinding) {
     IVariableBinding oldBinding = getVariableBinding(node);
     assert oldBinding != null;
-    instance.mappedVariables.put(oldBinding, newBinding);
+    mappedVariables.put(oldBinding, newBinding);
   }
 
-  public static IVariableBinding getMappedVariable(IVariableBinding binding) {
-    IVariableBinding var = instance.mappedVariables.get(binding);
+  @Override
+  public IVariableBinding getMappedVariable(IVariableBinding binding) {
+    IVariableBinding var = mappedVariables.get(binding);
     return var != null ? var : binding;
   }
 
-  public static void addMappedInvocation(Expression method, IMethodBinding binding) {
-    instance.mappedInvocations.put(method, binding);
-    Types.addBinding(method, binding);
+  @Override
+  public void addMappedInvocation(Expression method, IMethodBinding binding) {
+    mappedInvocations.put(method, binding);
+    addBinding(method, binding);
   }
 
-  public static IMethodBinding resolveInvocationBinding(Expression invocation) {
-    if (instance.mappedInvocations.containsKey(invocation)) {
-      return instance.mappedInvocations.get(invocation);
+  @Override
+  public IMethodBinding resolveInvocationBinding(Expression invocation) {
+    if (mappedInvocations.containsKey(invocation)) {
+      return mappedInvocations.get(invocation);
     }
     return null;
   }
 
-  public static IOSTypeBinding resolveIOSType(String name) {
-    return instance.iosBindingMap.get(name);
+  @Override
+  public IOSTypeBinding resolveIOSType(String name) {
+    return iosBindingMap.get(name);
   }
 
-  public static boolean isJavaObjectType(ITypeBinding type) {
-    return instance.javaObjectType.equals(type);
+  @Override
+  public boolean isJavaObjectType(ITypeBinding type) {
+    return javaObjectType.equals(type);
   }
 
-  public static boolean isJavaStringType(ITypeBinding type) {
-    return instance.javaStringType.equals(type);
+  @Override
+  public boolean isJavaStringType(ITypeBinding type) {
+    return javaStringType.equals(type);
   }
 
-  public static boolean isJavaNumberType(ITypeBinding type) {
-    return type.isAssignmentCompatible(instance.javaNumberType);
+  @Override
+  public boolean isJavaNumberType(ITypeBinding type) {
+    return type.isAssignmentCompatible(javaNumberType);
   }
 
-  public static boolean isFloatingPointType(ITypeBinding type) {
-    return type.isEqualTo(instance.ast.resolveWellKnownType("double")) ||
-        type.isEqualTo(instance.ast.resolveWellKnownType("float")) ||
-        type == instance.ast.resolveWellKnownType("java.lang.Double") ||
-        type == instance.ast.resolveWellKnownType("java.lang.Float");
+  @Override
+  public boolean isFloatingPointType(ITypeBinding type) {
+    return type.isEqualTo(ast.resolveWellKnownType("double")) ||
+        type.isEqualTo(ast.resolveWellKnownType("float")) ||
+        type == ast.resolveWellKnownType("java.lang.Double") ||
+        type == ast.resolveWellKnownType("java.lang.Float");
   }
 
-  public static boolean isBooleanType(ITypeBinding type) {
-    return instance.booleanType.equals(type);
+  @Override
+  public boolean isBooleanType(ITypeBinding type) {
+    return booleanType.equals(type);
   }
 
-  public static ITypeBinding resolveIOSType(Type type) {
+  @Override
+  public ITypeBinding resolveIOSType(Type type) {
     if (type instanceof SimpleType) {
       String name = ((SimpleType) type).getName().getFullyQualifiedName();
       return resolveIOSType(name);
@@ -563,35 +592,41 @@ public class Types {
     return null;
   }
 
-  public static IOSTypeBinding resolveArrayType(String name) {
-    return instance.arrayTypeMap.get(name);
+  @Override
+  public IOSTypeBinding resolveArrayType(String name) {
+    return arrayTypeMap.get(name);
   }
 
-  public static IOSArrayTypeBinding resolveArrayType(ITypeBinding binding) {
-    IOSArrayTypeBinding arrayBinding = instance.arrayBindingMap.get(binding);
-    return arrayBinding != null ? arrayBinding : instance.IOSObjectArray;
+  @Override
+  public IOSArrayTypeBinding resolveArrayType(ITypeBinding binding) {
+    IOSArrayTypeBinding arrayBinding = arrayBindingMap.get(binding);
+    return arrayBinding != null ? arrayBinding : IOSObjectArray;
   }
 
-  public static String getPrimitiveTypeName(ITypeBinding binding) {
-    return instance.primitiveTypeNameMap.get(binding);
+  @Override
+  public String getPrimitiveTypeName(ITypeBinding binding) {
+    return primitiveTypeNameMap.get(binding);
   }
 
-  public static IBinding getBinding(Object node) {
-    IBinding binding = instance.bindingMap.get(node);
+  @Override
+  public IBinding getBinding(Object node) {
+    IBinding binding = bindingMap.get(node);
     assert binding != null;
     return binding;
   }
 
-  public static void addBinding(Object node, IBinding binding) {
+  @Override
+  public void addBinding(Object node, IBinding binding) {
     assert binding != null;
-    instance.bindingMap.put(node, binding);
+    bindingMap.put(node, binding);
   }
 
   /**
    * Return a type binding for a specified ASTNode or IOS node, or null if
    * no type binding exists.
    */
-  public static ITypeBinding getTypeBinding(Object node) {
+  @Override
+  public ITypeBinding getTypeBinding(Object node) {
     IBinding binding = getBinding(node);
     if (binding instanceof ITypeBinding) {
       return (ITypeBinding) binding;
@@ -604,12 +639,14 @@ public class Types {
     return null;
   }
 
-  public static IMethodBinding getMethodBinding(Object node) {
+  @Override
+  public IMethodBinding getMethodBinding(Object node) {
     IBinding binding = getBinding(node);
     return binding instanceof IMethodBinding ? ((IMethodBinding) binding) : null;
   }
 
-  public static IVariableBinding getVariableBinding(Object node) {
+  @Override
+  public IVariableBinding getVariableBinding(Object node) {
     IBinding binding = getBinding(node);
     return binding instanceof IVariableBinding ? ((IVariableBinding) binding) : null;
   }
@@ -618,71 +655,83 @@ public class Types {
    * Walks an AST and asserts there is a resolved binding for every
    * ASTNode type that is supposed to have one.
    */
-  public static void verifyNode(ASTNode node) {
-    BindingMapVerifier.verify(node, instance.bindingMap);
+  @Override
+  public void verifyNode(ASTNode node) {
+    BindingMapVerifier.verify(node, bindingMap);
   }
 
-  public static void verifyNodes(List<? extends ASTNode> nodes) {
+  @Override
+  public void verifyNodes(List<? extends ASTNode> nodes) {
     for (ASTNode node : nodes) {
-      BindingMapVerifier.verify(node, instance.bindingMap);
+      BindingMapVerifier.verify(node, bindingMap);
     }
   }
 
-  public static void substitute(ASTNode oldNode, ASTNode replacement) {
-    instance.substitutionMap.put(oldNode, replacement);
+  @Override
+  public void substitute(ASTNode oldNode, ASTNode replacement) {
+    substitutionMap.put(oldNode, replacement);
   }
 
-  public static ASTNode getNode(ASTNode currentNode) {
-    return instance.substitutionMap.get(currentNode);
+  @Override
+  public ASTNode getNode(ASTNode currentNode) {
+    return substitutionMap.get(currentNode);
   }
 
-  static ITypeBinding getIOSArrayComponentType(IOSArrayTypeBinding arrayType) {
-    ITypeBinding type = instance.componentTypeMap.get(arrayType);
-    return type != null ? type : instance.NSObject;
+  ITypeBinding getIOSArrayComponentType(IOSArrayTypeBinding arrayType) {
+    ITypeBinding type = componentTypeMap.get(arrayType);
+    return type != null ? type : NSObject;
   }
 
-  public static ITypeBinding renameTypeBinding(String newName, ITypeBinding newDeclaringClass,
+  @Override
+  public ITypeBinding renameTypeBinding(String newName, ITypeBinding newDeclaringClass,
       ITypeBinding originalBinding) {
     ITypeBinding renamedBinding =
         RenamedTypeBinding.rename(newName, newDeclaringClass, originalBinding);
-    instance.renamedTypeMap.put(originalBinding, renamedBinding);
+    renamedTypeMap.put(originalBinding, renamedBinding);
     return renamedBinding;
   }
 
-  public static ITypeBinding getRenamedBinding(ITypeBinding original) {
-    return original != null && instance.renamedTypeMap.containsKey(original)
-        ? instance.renamedTypeMap.get(original) : original;
+  @Override
+  public ITypeBinding getRenamedBinding(ITypeBinding original) {
+    return original != null && renamedTypeMap.containsKey(original)
+        ? renamedTypeMap.get(original) : original;
   }
 
-  public static void addFunction(IMethodBinding binding) {
-    instance.functions.add(binding);
+  @Override
+  public void addFunction(IMethodBinding binding) {
+    functions.add(binding);
   }
 
-  public static boolean isFunction(IMethodBinding binding) {
-    if (instance.functions.contains(binding)) {
+  @Override
+  public boolean isFunction(IMethodBinding binding) {
+    if (functions.contains(binding)) {
       return true;
     }
     IMethodBinding decl = binding.getMethodDeclaration();
-    return decl != null ? instance.functions.contains(decl) : false;
+    return decl != null ? functions.contains(decl) : false;
   }
 
-  public static boolean isVoidType(Type type) {
+  @Override
+  public boolean isVoidType(Type type) {
     return isVoidType(getTypeBinding(type));
   }
 
-  public static boolean isVoidType(ITypeBinding type) {
-    return type.isEqualTo(instance.voidType);
+  @Override
+  public boolean isVoidType(ITypeBinding type) {
+    return type.isEqualTo(voidType);
   }
 
-  public static boolean isJavaVoidType(ITypeBinding type) {
-    return type.isEqualTo(instance.javaVoidType);
+  @Override
+  public boolean isJavaVoidType(ITypeBinding type) {
+    return type.isEqualTo(javaVoidType);
   }
 
   /**
    * Returns the declaration for a specified binding from a list of
    * type declarations.
    */
-  public static TypeDeclaration getTypeDeclaration(ITypeBinding binding, List<?> declarations) {
+  @Override
+  public TypeDeclaration getTypeDeclaration(ITypeBinding binding, List<?> declarations) {
     binding = binding.getTypeDeclaration();
     for (Object decl : declarations) {
       ITypeBinding type = getTypeBinding(decl).getTypeDeclaration();
@@ -697,41 +746,49 @@ public class Types {
    * Adds a variable that needs to be cast when referenced.  This is necessary
    * for gcc to verify parameters of generic interface's methods
    */
-  public static void addVariableCast(IVariableBinding var, ITypeBinding castType) {
-    instance.variablesNeedingCasts.put(var.getVariableDeclaration(), castType);
+  @Override
+  public void addVariableCast(IVariableBinding var, ITypeBinding castType) {
+    variablesNeedingCasts.put(var.getVariableDeclaration(), castType);
   }
 
-  public static boolean variableHasCast(IVariableBinding var) {
-    return instance.variablesNeedingCasts.containsKey(var.getVariableDeclaration());
+  @Override
+  public boolean variableHasCast(IVariableBinding var) {
+    return variablesNeedingCasts.containsKey(var.getVariableDeclaration());
   }
 
-  public static ITypeBinding getCastForVariable(IVariableBinding var) {
-    return instance.variablesNeedingCasts.get(var.getVariableDeclaration());
+  @Override
+  public ITypeBinding getCastForVariable(IVariableBinding var) {
+    return variablesNeedingCasts.get(var.getVariableDeclaration());
   }
 
-  public static void addReleaseableFields(Collection<IVariableBinding> fields) {
+  @Override
+  public void addReleaseableFields(Collection<IVariableBinding> fields) {
     for (IVariableBinding field : fields) {
-      instance.releaseableFields.add(field.getVariableDeclaration());
+      releaseableFields.add(field.getVariableDeclaration());
     }
   }
 
-  public static boolean isReleaseableField(IVariableBinding var) {
-    return var != null ? instance.releaseableFields.contains(var.getVariableDeclaration()) : false;
+  @Override
+  public boolean isReleaseableField(IVariableBinding var) {
+    return var != null ? releaseableFields.contains(var.getVariableDeclaration()) : false;
   }
 
-  public static NullLiteral newNullLiteral() {
-    NullLiteral nullLiteral = instance.ast.newNullLiteral();
+  @Override
+  public NullLiteral newNullLiteral() {
+    NullLiteral nullLiteral = ast.newNullLiteral();
     addBinding(nullLiteral, NullType.SINGLETON);
     return nullLiteral;
   }
 
-  public static SimpleName newLabel(String identifier) {
-    SimpleName node = instance.ast.newSimpleName(identifier);
+  @Override
+  public SimpleName newLabel(String identifier) {
+    SimpleName node = ast.newSimpleName(identifier);
     addBinding(node, new IOSTypeBinding(identifier, false));
     return node;
   }
 
-  public static boolean isJUnitTest(ITypeBinding type) {
+  @Override
+  public boolean isJUnitTest(ITypeBinding type) {
     // Skip JUnit framework classes.
     if (type.getPackage().getName().equals("junit.framework")) {
       return false;
@@ -753,38 +810,46 @@ public class Types {
     return false;
   }
 
-  public static ITypeBinding getWrapperType(ITypeBinding primitiveType) {
-    return instance.primitiveToWrapperTypes.get(primitiveType);
+  @Override
+  public ITypeBinding getWrapperType(ITypeBinding primitiveType) {
+    return primitiveToWrapperTypes.get(primitiveType);
   }
 
-  public static ITypeBinding getPrimitiveType(ITypeBinding wrapperType) {
-    return instance.wrapperToPrimitiveTypes.get(wrapperType);
+  @Override
+  public ITypeBinding getPrimitiveType(ITypeBinding wrapperType) {
+    return wrapperToPrimitiveTypes.get(wrapperType);
   }
 
-  public static ITypeBinding getNSNumber() {
-    return instance.NSNumber;
+  @Override
+  public ITypeBinding getNSNumber() {
+    return NSNumber;
   }
 
-  public static ITypeBinding getNSObject() {
-    return instance.NSObject;
+  @Override
+  public ITypeBinding getNSObject() {
+    return NSObject;
   }
 
-  public static ITypeBinding getNSString() {
-    return instance.NSString;
+  @Override
+  public ITypeBinding getNSString() {
+    return NSString;
   }
 
-  public static ITypeBinding getIOSClass() {
-    return instance.IOSClass;
+  @Override
+  public ITypeBinding getIOSClass() {
+    return IOSClass;
   }
 
-  public static boolean isWeakReference(IVariableBinding var) {
+  @Override
+  public boolean isWeakReference(IVariableBinding var) {
     if (hasWeakAnnotation(var)) {
       return true;
     }
     return hasWeakAnnotation(var.getType());
   }
 
-  public static boolean hasAnyAnnotation(IBinding binding, Class<?>[] annotations) {
+  @Override
+  public boolean hasAnyAnnotation(IBinding binding, Class<?>[] annotations) {
     for (IAnnotationBinding annotation : binding.getAnnotations()) {
       String name = annotation.getAnnotationType().getQualifiedName();
       for (Class<?> annotationClass : annotations) {
@@ -796,15 +861,18 @@ public class Types {
     return false;
   }
 
-  public static boolean hasAnnotation(IBinding binding, Class<?> annotation) {
+  @Override
+  public boolean hasAnnotation(IBinding binding, Class<?> annotation) {
     return hasAnyAnnotation(binding, new Class<?>[] { annotation });
   }
 
-  public static boolean hasWeakAnnotation(IBinding binding) {
+  @Override
+  public boolean hasWeakAnnotation(IBinding binding) {
     return hasAnyAnnotation(binding, new Class<?>[] { Weak.class, WeakOuter.class });
   }
 
-  public static boolean hasAutoreleasePoolAnnotation(IBinding binding) {
+  @Override
+  public boolean hasAutoreleasePoolAnnotation(IBinding binding) {
     boolean hasAnnotation = hasAnnotation(binding, AutoreleasePool.class);
 
     if (hasAnnotation && binding instanceof IMethodBinding) {
@@ -1055,7 +1123,8 @@ public class Types {
    * Returns the signature of an element, defined in the Java Language
    * Specification 3rd edition, section 13.1.
    */
-  public static String getSignature(IBinding binding) {
+  @Override
+  public String getSignature(IBinding binding) {
     if (binding instanceof ITypeBinding) {
       return ((ITypeBinding) binding).getBinaryName();
     }

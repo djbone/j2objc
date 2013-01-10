@@ -18,10 +18,12 @@ package com.google.devtools.j2objc.gen;
 
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import com.google.devtools.j2objc.types.TypeService;
 import com.google.devtools.j2objc.types.Types;
 import com.google.devtools.j2objc.util.ASTNodeException;
 import com.google.devtools.j2objc.util.ErrorReportingASTVisitor;
 import com.google.devtools.j2objc.util.NameTable;
+import com.google.inject.Inject;
 
 import org.eclipse.jdt.core.dom.ASTNode;
 import org.eclipse.jdt.core.dom.IMethodBinding;
@@ -45,6 +47,13 @@ import java.util.Set;
 public class HiddenFieldDetector extends ErrorReportingASTVisitor {
   private final Set<IVariableBinding> fieldNameConflicts = Sets.newLinkedHashSet();
 
+  private final TypeService types;
+
+  @Inject
+  public HiddenFieldDetector(TypeService types) {
+	this.types = types;
+  }
+
   /**
    * A map of each type to a set of their field names.
    */
@@ -63,7 +72,7 @@ public class HiddenFieldDetector extends ErrorReportingASTVisitor {
   public boolean visit(TypeDeclaration node) {
     if (!node.isInterface()) {
       Set<String> names = Sets.newLinkedHashSet();
-      ITypeBinding binding = Types.getTypeBinding(node);
+      ITypeBinding binding = types.getTypeBinding(node);
       addFields(binding, true, names);
       fieldNameMap.put(binding.getBinaryName(), names);
     }
